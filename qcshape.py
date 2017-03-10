@@ -153,7 +153,7 @@ def shapeByRegion(gtfdict,shapefile):
                          else:
                              txpos=(biggenpos-bigtmprng[0][0])+bigtmprng[0][2]
                              #then get the shape at 1-that position in tmpshape[3:]
-                             shapeval=tmpshape[3:][txpos-1] 
+                             shapeval=tmpshape[3:][txpos-1]
                              shapesub.append(shapeval)
                      shapeout.append([txname,feature.feature+'_25',feature.start,feature.end,feature.strand,shapesub])
 
