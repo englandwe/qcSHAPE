@@ -10,7 +10,7 @@ import re
 from Bio import SeqIO
 from Bio.Alphabet import IUPAC
 from Bio.Seq import Seq
-
+#this is a modification
 #####
 
 class GtfRec(object):
@@ -201,7 +201,7 @@ for id in id_list:
     rt_file=id+'.rt'
     #02 - count reads mapped to each transcript_biotype
     #returns dict of {biotype:count}, plus a count of mapped reads
-    bts,mapct=countBiotypes(gtf_rec_list,samfile)
+    bts,mapct=countBiotypes(gtfdict,samfile)
     btcount.append(bts)
     #01 - percentage reads mapped, period
     #returns float
