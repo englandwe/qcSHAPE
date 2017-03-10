@@ -7,9 +7,13 @@ import subprocess
 import os
 import glob
 import re
+#biopython
 from Bio import SeqIO
 from Bio.Alphabet import IUPAC
 from Bio.Seq import Seq
+#scipy
+from scipy.stats.stats import pearsonr
+
 #####
 
 class GtfRec(object):
@@ -159,6 +163,37 @@ def shapeByRegion(gtfdict,shapefile):
 
     return shapeout
 
+
+
+def corrRPKM(id_list):
+    rpkm_corr_out=[]
+    rpkm_list=[]
+    for entry in id_list:
+        tmpdict={}
+        rpkm_file=id+'.rpkm'
+        with open(rpkm_file) as infile:
+            for line in infile:
+                tmpline=line.strip().split()
+                tmpdict[tmpline[0]]=float(tmpline[4])
+        rpkm_list.append([entry,tmpdict])
+    for i in range(0,len(rpkm_list)-1):
+        for j in range(i,len(rpkm_list)-1):
+            vals1=[]
+            vals2=[]
+            keyset=set([key for tx in [rpkm_list[i]]+[rpkm_list[j]] for key in tx[1].keys()])
+            for key in keyset:
+                try:
+                    val1=rpkm_list[i][1][key]
+                    val2=rpkm_list[j][1][key]
+                except KeyError:
+                    continue
+                vals_1.append(val1)
+                vals_2.append(val2)
+        rpkm_r=pearsonr(val1,val2)
+        rpkm_corr_out.append([rpkm_list[i],rpkm_list[j],rpkm_r[0],rpkm_r[1]])
+    return rpkm_corr_out
+
+
 def flattenList(listin):
     list2=[]
     for item in listin:
@@ -171,7 +206,8 @@ def flattenList(listin):
 #make this a dict
 gtfdict={}
 #with open(sys.argv[2] as infile:
-with open('../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
+#with open('../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
+with open('../Mus_musculus.GRCm38.87.gtf') as infile:
     for line in infile:
         if not line.startswith('#'):
             rectmp=GtfRec(line.strip().split('\t'))
@@ -185,7 +221,8 @@ with open('../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
 
 
 #fasta_dict=SeqIO.index(sys.argv[3], "fasta", alphabet=IUPAC.unambiguous_dna)
-fasta_dict=SeqIO.index('../mouse_txome/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
+#fasta_dict=SeqIO.index('../mouse_txome/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
+fasta_dict=SeqIO.index('../Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
 
 #this will be sys.argv[1]
 #sam_list=glob.glob(workdir+'/*.sam')
@@ -225,3 +262,10 @@ f.close()
 
 #3.5. Correlation of expression level b/w replicates
 #4. Correlation b/w stops in replicates (sample should have more in common than control)
+
+#first, expression (RPKM files)
+
+rpkm_corr=corrRPKM(id_list)
+g=open('rpkmcorrtest','w')
+g.write(flattenList(rpkm_corr))
+g.close()
