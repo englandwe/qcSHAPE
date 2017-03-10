@@ -10,7 +10,6 @@ import re
 from Bio import SeqIO
 from Bio.Alphabet import IUPAC
 from Bio.Seq import Seq
-#this is a modification
 #####
 
 class GtfRec(object):
@@ -201,7 +200,7 @@ for id in id_list:
     rt_file=id+'.rt'
     #02 - count reads mapped to each transcript_biotype
     #returns dict of {biotype:count}, plus a count of mapped reads
-    bts,mapct=countBiotypes(gtfdict,samfile)
+    bts,mapct=countBiotypes(gtfdict,sam_file)
     btcount.append(bts)
     #01 - percentage reads mapped, period
     #returns float
@@ -223,3 +222,6 @@ shape_by_reg=shapeByRegion(shapefile,gtfdict)
 f=open('shapebyregtest','w')
 f.write(flattenList(shape_by_reg))
 f.close()
+
+#3.5. Correlation of expression level b/w replicates
+#4. Correlation b/w stops in replicates (sample should have more in common than control)
