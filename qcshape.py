@@ -13,7 +13,8 @@ from Bio.Alphabet import IUPAC
 from Bio.Seq import Seq
 #scipy
 from scipy.stats.stats import pearsonr
-
+#just for timing
+from datetime import datetime
 #####
 
 class GtfRec(object):
@@ -31,43 +32,33 @@ class GtfRec(object):
              self.splitline=self.item.replace('\"','').split(' ')
              self.attdict[self.splitline[0]]=self.splitline[1]
 
-def file_len(fname):
-    i=0
-    with open(fname) as f:
-        for i, l in enumerate(f):
-            pass
-    return i + 1
-
-
-#def percReadsMapped(trimmed_fastq,mapct):
-#    total_reads=file_len(trimmed_fastq)/4
-#    perc_mapped=mapct/float(total_reads)
-#    return perc_mapped
-
-
-
 def countBiotypes(gtfdict,sam_file):
     btdict={}
-    mapped_reads=set()
+    #mapped_reads=set()
+    mapped_ct=0
     unmapped_ct=0
     with open(sam_file) as infile:
         for line in infile:
             #no headers, no unmapped reads
             if not line.startswith('@'):
                 tmpline=line.strip().split('\t')
-                if tmpline[1] == '4':
+                #if tmpline[1] == '4':
+                #bitwise is bestwise
+                if int(tmpline[1]) & 4:
                     unmapped_ct+=1
-                else:
+                #else:
+                elif not int(tmpline[1]) & 2304:
                     maptx=tmpline[2]
-                    mapped_reads.add(tmpline[0])
+                    mapped_ct+=1
+                    #mapped_reads.add(tmpline[0])
                     for rec in gtfdict[maptx]:
                         if rec.feature == 'transcript':
                             biotype=rec.attdict['transcript_biotype']
-                            if biotype in btdict:
+                            try:
                                 btdict[biotype]+=1
-                            else:
+                            except KeyError:
                                 btdict[biotype]=1
-    return btdict,len(mapped_reads),unmapped_ct
+    return btdict,mapped_ct,unmapped_ct
 
 
 
@@ -98,9 +89,9 @@ def stopPositions(gtfdict,fasta_data,rtfile,min_stops):
                     if rts >= min_stops:
                         #icSHAPE pipeline already shifts the base 1 the left (5')
                         rtbase=fullseq[idx].upper()
-                        if rtbase in basecounts:
+                        try:
                             basecounts[rtbase]+=1
-                        else:
+                        except KeyError:
                             basecounts[rtbase]=1
     return basecounts
 
@@ -243,12 +234,13 @@ def flattenDict(dictin):
     return final
 
 #####
+sys.stderr.write('importing gtf @ %s' % (str(datetime.now())) + '\n')
 
 #make this a dict
 gtfdict={}
 #with open(sys.argv[2] as infile:
-#with open('../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
-with open('../Mus_musculus.GRCm38.87.gtf') as infile:
+with open('../../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
+#with open('../Mus_musculus.GRCm38.87.gtf') as infile:
     for line in infile:
         if not line.startswith('#'):
             rectmp=GtfRec(line.strip().split('\t'))
@@ -260,20 +252,22 @@ with open('../Mus_musculus.GRCm38.87.gtf') as infile:
                     gtfdict[transcript]=[rectmp]
 
 
+sys.stderr.write('importing fasta @ %s' % (str(datetime.now())) + '\n')
 
 #fasta_dict=SeqIO.index(sys.argv[3], "fasta", alphabet=IUPAC.unambiguous_dna)
-#fasta_dict=SeqIO.index('../mouse_txome/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
-fasta_dict=SeqIO.index('../Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
+fasta_dict=SeqIO.index('../../mouse_txome/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
+#fasta_dict=SeqIO.index('../Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
 
 #this will be sys.argv[1]
 #sam_list=glob.glob(workdir+'/*.sam')
-id_list=['SRR1534952','SRR1534953','SRR1534954','SRR1534955']
+id_list=['SRR1534952']
 shapefile='icshape.out'
 prm=[]
 btcount=[]
 basestops=[]
 map_unmap=[]
 for id in id_list:
+    sys.stderr.write('counting biotypes: %s @ %s' % (id,str(datetime.now())) + '\n')
     sam_file=id+'.sam'
     rt_file=id+'.rt'
     #02 - count reads mapped to each transcript_biotype
@@ -287,6 +281,7 @@ for id in id_list:
     prm.append(mapct/float(mapct+unmapct))
     #03 & 05 - count raw stops at each base (also gets you total stops)
     #returns dict of {base:count}
+    sys.stderr.write('counting RT stops: %s @ %s' % (id,str(datetime.now())) + '\n')
     min_stops=1
     basestops.append(stopPositions(gtfdict,fasta_dict,rt_file,min_stops))
 
@@ -304,6 +299,7 @@ e.close()
 #06 & 07 shape across RNA regions (5'UTR,3'UTR, orf, start & stop codons), plus a range around start codons
 #this will be shape reactivity - i.e. final output, already background subtracted
 #returns a list of lists: [tx,genomic_start,genomic_stop,strand,[list of shape values]]
+sys.stderr.write('shape by region @ %s' % (str(datetime.now())) + '\n')
 shape_by_reg=shapeByRegion(gtfdict,shapefile)
 f=open('shapebyregtest','w')
 f.write(flattenList(shape_by_reg))
@@ -313,14 +309,16 @@ f.close()
 #4. Correlation b/w stops in replicates (sample should have more in common than control)
 
 #first, expression (RPKM files)
-
+sys.stderr.write('RPKM corr @ %s' % (str(datetime.now())) + '\n')
 rpkm_corr=corrRPKM(id_list)
 g=open('rpkmcorrtest','w')
 g.write(flattenList(rpkm_corr))
 g.close()
 
 #now RT
+sys.stderr.write('RT corr @ %s' % (str(datetime.now())) + '\n')
 rt_corr=corrRT(id_list,min_stops)
 h=open('rtcorrtest','w')
 h.write(flattenList(rt_corr))
 h.close()
+sys.stderr.write('Done @ %s' % (str(datetime.now())) + '\n')
