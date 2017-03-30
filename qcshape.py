@@ -3,10 +3,10 @@
 #Input: a directory with the output of the icSHAPE pipeline
 
 import sys
-import subprocess
 import os
-import glob
 import re
+from multiprocessing import Pool
+from collections import Counter
 #biopython
 from Bio import SeqIO
 from Bio.Alphabet import IUPAC
@@ -16,7 +16,7 @@ from scipy.stats.stats import pearsonr
 #just for timing
 from datetime import datetime
 #####
-
+#Classes
 class GtfRec(object):
     def __init__(self,reclist):
          self.seqname=reclist[0]
@@ -32,13 +32,63 @@ class GtfRec(object):
              self.splitline=self.item.replace('\"','').split(' ')
              self.attdict[self.splitline[0]]=self.splitline[1]
 
-def countBiotypes(gtfdict,sam_file):
+#Multiprocessing
+def chunkify(fname,size):
+    fileEnd = os.path.getsize(fname)
+    with open(fname,'r') as f:
+        chunkEnd = f.tell()
+        while True:
+            chunkStart = chunkEnd
+            f.seek(size,1)
+            f.readline()
+            chunkEnd = f.tell()
+            yield chunkStart, chunkEnd - chunkStart
+            if chunkEnd > fileEnd:
+                break
+
+def child_initialize(_inData):
+     global ggtfdict
+     ggtfdict = _inData
+
+def child_initialize_2(_inData,_inData2):
+     global ggtfdict, gfasta_data
+     ggtfdict = _inData
+     gfasta_data = _inData2
+
+#Make pretty output
+def flattenList(listin):
+    list2=[]
+    for item in listin:
+        list2.append('\t'.join([str(x) for x in item]))
+    final='\n'.join(list2)
+    return final
+
+def flattenListAddCol(listin,col1):
+    list2=[]
+    for item in listin:
+        list2.append(str(col1) + '\t' + '\t'.join([str(x) for x in item]))
+    final='\n'.join(list2)
+    return final
+
+def flattenDict(dictin):
+    listin=[[key,val] for key,val in dictin.iteritems()]
+    final=flattenList(listin)
+    return final
+
+def flattenDictAddCol(dictin,col1):
+    listin=[[key,val] for key,val in dictin.iteritems()]
+    final=flattenListAddCol(listin,col1)
+    return final
+
+#Science goes here
+def countBiotypes(sam_file,chunkStart,chunkSize):
     btdict={}
-    #mapped_reads=set()
     mapped_ct=0
     unmapped_ct=0
     with open(sam_file) as infile:
-        for line in infile:
+        infile.seek(chunkStart)
+        lines = infile.read(chunkSize).splitlines()
+        for line in lines:
             #no headers, no unmapped reads
             if not line.startswith('@'):
                 tmpline=line.strip().split('\t')
@@ -46,20 +96,24 @@ def countBiotypes(gtfdict,sam_file):
                 #bitwise is bestwise
                 if int(tmpline[1]) & 4:
                     unmapped_ct+=1
+                    #with unmapped_ct.get_lock():
+                        #unmapped_ct.value+=1
                 #else:
                 elif not int(tmpline[1]) & 2304:
                     maptx=tmpline[2]
                     mapped_ct+=1
+                    #with mapped_ct.get_lock():
+                        #mapped_ct.value+=1
                     #mapped_reads.add(tmpline[0])
-                    for rec in gtfdict[maptx]:
+                    for rec in ggtfdict[maptx]:
                         if rec.feature == 'transcript':
                             biotype=rec.attdict['transcript_biotype']
                             try:
                                 btdict[biotype]+=1
                             except KeyError:
                                 btdict[biotype]=1
+    sys.stderr.write('another chunk bites the dust @ %s' % (str(datetime.now())) + '\n')
     return btdict,mapped_ct,unmapped_ct
-
 
 
 def stopPositions(gtfdict,fasta_data,rtfile,min_stops):
@@ -86,7 +140,7 @@ def stopPositions(gtfdict,fasta_data,rtfile,min_stops):
                 #the first would hit the base before the tx - so we don't have the base
                 # for now, skipping first (because it has no base) and last (because it will never have any stops)
                 for idx,rts in enumerate(txtmp[4:-1]):
-                    if rts >= min_stops:
+                    if float(rts) >= min_stops:
                         #icSHAPE pipeline already shifts the base 1 the left (5')
                         rtbase=fullseq[idx].upper()
                         try:
@@ -94,7 +148,6 @@ def stopPositions(gtfdict,fasta_data,rtfile,min_stops):
                         except KeyError:
                             basecounts[rtbase]=1
     return basecounts
-
 
 def genToTx(txname,gtfdict):
     exonlist=[[x.seqname,x.start,x.end,x.strand,int(x.attdict['exon_number'])] for x in gtfdict[txname] if x.feature == 'exon']
@@ -109,20 +162,21 @@ def genToTx(txname,gtfdict):
         tx_start=tx_stop+1
     return rangelist
 
-
-def shapeByRegion(gtfdict,shapefile):
+def shapeByRegion(shapefile,chunkStart,chunkSize):
     #we're going to be agnostic to that the feature type is (unless it's a start codon or a transcript on an exon)
     #just grab shape reactivity for all positions in its range
     #for start codons, we're additionally going to grab 25bp up & down the transcript
     #transcript and exon features will be ignored
     shapeout=[]
     with open(shapefile) as infile:
-         for line in infile:
+        infile.seek(chunkStart)
+        lines = infile.read(chunkSize).splitlines()
+        for line in lines:
              tmpshape=line.strip().split('\t')
              txname=tmpshape[0]
              #translate the genome positions into tx positions using the magic of exons
-             ranges=genToTx(txname,gtfdict)
-             feature_list=[x for x in gtfdict[txname] if x.feature not in ['exon','transcript']]
+             ranges=genToTx(txname,ggtfdict)
+             feature_list=[x for x in ggtfdict[txname] if x.feature not in ['exon','transcript']]
              for feature in feature_list:
                  shapesub=[]
                  #for position in feature
@@ -147,7 +201,7 @@ def shapeByRegion(gtfdict,shapefile):
                              shapeval=tmpshape[3:][txpos-1]
                              shapesub.append(shapeval)
                      shapeout.append([txname,feature.feature+'_25',feature.start+25,feature.end-25,feature.strand,shapesub])
-
+    sys.stderr.write('another chunk bites the dust @ %s' % (str(datetime.now())) + '\n')
     return shapeout
 
 
@@ -221,25 +275,14 @@ def corrRT(id_list,min_stops):
             rt_corr_out.append([rt_list[i][0],rt_list[j][0],rt_r[0],rt_r[1]])
     return rt_corr_out
 
-def flattenList(listin):
-    list2=[]
-    for item in listin:
-        list2.append('\t'.join([str(x) for x in item]))
-    final='\n'.join(list2)
-    return final
-
-def flattenDict(dictin):
-    listin=[[key,val] for key,val in dictin.iteritems()]
-    final=flattenList(listin)
-    return final
 
 #####
+#main
 sys.stderr.write('importing gtf @ %s' % (str(datetime.now())) + '\n')
 
-#make this a dict
 gtfdict={}
-#with open(sys.argv[2] as infile:
-with open('../../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
+with open(sys.argv[2]) as infile:
+#with open('../../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
 #with open('../Mus_musculus.GRCm38.87.gtf') as infile:
     for line in infile:
         if not line.startswith('#'):
@@ -255,55 +298,82 @@ with open('../../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
 sys.stderr.write('importing fasta @ %s' % (str(datetime.now())) + '\n')
 
 #fasta_dict=SeqIO.index(sys.argv[3], "fasta", alphabet=IUPAC.unambiguous_dna)
-fasta_dict=SeqIO.index('../../mouse_txome/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
+#fasta_dict=SeqIO.index('../../mouse_txome/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
 #fasta_dict=SeqIO.index('../Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
+
+#higher memory, hopefully faster
+fasta_dict=SeqIO.to_dict(SeqIO.parse(sys.argv[3], "fasta", alphabet=IUPAC.unambiguous_dna))
+
+cores=int(sys.argv[1])
 
 #this will be sys.argv[1]
 #sam_list=glob.glob(workdir+'/*.sam')
-id_list=['SRR1534952']
+id_list=['SRR1534952','SRR1534953','SRR1534954','SRR1534955']
 shapefile='icshape.out'
 prm=[]
 btcount=[]
 basestops=[]
-map_unmap=[]
+min_stops=1
 for id in id_list:
-    sys.stderr.write('counting biotypes: %s @ %s' % (id,str(datetime.now())) + '\n')
     sam_file=id+'.sam'
     rt_file=id+'.rt'
-    #02 - count reads mapped to each transcript_biotype
-    #returns dict of {biotype:count}, plus a count of mapped reads
-    bts,mapct,unmapct=countBiotypes(gtfdict,sam_file)
-    btcount.append(bts)
-    map_unmap.append((mapct,unmapct))
-    #01 - percentage reads mapped, period
-    #returns float
-    #prm.append(percReadsMapped(trimmed_fastq,mapct))
-    prm.append(mapct/float(mapct+unmapct))
-    #03 & 05 - count raw stops at each base (also gets you total stops)
-    #returns dict of {base:count}
+    #BIOTYPES - this works
+    sys.stderr.write('counting biotypes: %s @ %s' % (id,str(datetime.now())) + '\n')
+    btpool = Pool(cores, initializer = child_initialize, initargs = (gtfdict,))
+    btjobs = []
+    btjobs=[btpool.apply_async(countBiotypes, (sam_file,chunkStart,chunkSize)) for chunkStart,chunkSize in chunkify(sam_file,1024*1024*1024)]
+    btpool.close()
+    btpool.join()
+    btoutput=[btjob.get() for btjob in btjobs]
+    biotype_dict=dict(sum([Counter(x[0]) for x in btoutput], Counter()))
+    btcount.append(biotype_dict)
+    mapct=sum([x[1] for x in btoutput])
+    unmapct=sum([x[2] for x in btoutput])
+    mapperc=mapct/float(mapct+unmapct)
+    prm.append([mapct,unmapct,mapperc])
+    sys.stderr.write('done counting biotypes: %s @ %s' % (id,str(datetime.now())) + '\n')
+    #STOPS
     sys.stderr.write('counting RT stops: %s @ %s' % (id,str(datetime.now())) + '\n')
-    min_stops=1
     basestops.append(stopPositions(gtfdict,fasta_dict,rt_file,min_stops))
+    sys.stderr.write('done counting RT stops: %s @ %s' % (id,str(datetime.now())) + '\n')
 
-
-e=open('basestoptest','w')
+#Output reads mapped, biotypes, base stops
+mapout=open('reads_mapped.txt','w')
+mapout.write("Sample\tMapped\tUnmapped\tPercmapped\n")
 for i in range(0,len(id_list)):
-    e.write(id_list[i]+'\n')
-    e.write("Mapped, unmapped, percmapped: %s, %s, %s\n" % (map_unmap[i][0],map_unmap[i][1],prm[i]))
-    e.write(flattenDict(btcount[0])+'\n')
-    e.write(flattenDict(basestops[0]))
-e.close()
+    mapout.write("%s\t%s\t%s\t%s\n" % (id_list[i],prm[i][0],prm[i][1],prm[i][2]))
+mapout.close()
+
+btout=open('biotypes.txt','w')
+btout.write("Sample\tBiotype\tReadsMapped\n")
+for i in range(0,len(id_list)):
+    btout.write(flattenDictAddCol(btcount[i],id_list[i])+'\n')
+btout.close()
+
+rtout=open('stopbases.txt','w')
+rtout.write("Sample\tBase\tCount\n")
+for i in range(0,len(id_list)):
+    rtout.write(flattenDictAddCol(basestops[i],id_list[i])+'\n')
+rtout.close()
 
 
 #now for the non-file-specific stuff
 #06 & 07 shape across RNA regions (5'UTR,3'UTR, orf, start & stop codons), plus a range around start codons
 #this will be shape reactivity - i.e. final output, already background subtracted
 #returns a list of lists: [tx,genomic_start,genomic_stop,strand,[list of shape values]]
+
 sys.stderr.write('shape by region @ %s' % (str(datetime.now())) + '\n')
-shape_by_reg=shapeByRegion(gtfdict,shapefile)
-f=open('shapebyregtest','w')
-f.write(flattenList(shape_by_reg))
-f.close()
+shapepool = Pool(cores, initializer = child_initialize, initargs = (gtfdict,))
+shapejobs = []
+shapejobs=[shapepool.apply_async(shapeByRegion, (shapefile,chunkStart,chunkSize)) for chunkStart,chunkSize in chunkify(shapefile,10*1024*1024)]
+shapepool.close()
+shapepool.join()
+shapeoutput=[shapejob.get() for shapejob in shapejobs]
+shape_by_reg=[item for sublist in shapeoutput for item in sublist]
+regout=open('shaperegions.txt','w')
+regout.write(flattenList(shape_by_reg))
+regout.close()
+sys.stderr.write('Done with shape by region @ %s' % (str(datetime.now())) + '\n')
 
 #3.5. Correlation of expression level b/w replicates
 #4. Correlation b/w stops in replicates (sample should have more in common than control)
@@ -311,14 +381,15 @@ f.close()
 #first, expression (RPKM files)
 sys.stderr.write('RPKM corr @ %s' % (str(datetime.now())) + '\n')
 rpkm_corr=corrRPKM(id_list)
-g=open('rpkmcorrtest','w')
-g.write(flattenList(rpkm_corr))
-g.close()
+rpkmout=open('rpkmcorrtest','w')
+rpkmout.write(flattenList(rpkm_corr))
+rpkmout.close()
 
 #now RT
 sys.stderr.write('RT corr @ %s' % (str(datetime.now())) + '\n')
 rt_corr=corrRT(id_list,min_stops)
-h=open('rtcorrtest','w')
-h.write(flattenList(rt_corr))
-h.close()
+rtcorrout=open('rtcorrtest','w')
+rtcorrout.write(flattenList(rt_corr))
+rtcorrout.close()
 sys.stderr.write('Done @ %s' % (str(datetime.now())) + '\n')
+
