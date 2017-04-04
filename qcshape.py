@@ -165,7 +165,7 @@ def genToTx(txname,gtfdict):
 def shapeByRegion(shapefile,chunkStart,chunkSize):
     #we're going to be agnostic to that the feature type is (unless it's a start codon or a transcript on an exon)
     #just grab shape reactivity for all positions in its range
-    #for start codons, we're additionally going to grab 25bp up & down the transcript
+    #for start/stop codons, we're additionally going to grab 25bp up & down the transcript
     #transcript and exon features will be ignored
     shapeout=[]
     with open(shapefile) as infile:
@@ -187,8 +187,9 @@ def shapeByRegion(shapefile,chunkStart,chunkSize):
                      #then get the shape at 1-that position in tmpshape[3:]
                      shapeval=tmpshape[3:][txpos-1]
                      shapesub.append(shapeval)
-                 shapeout.append([txname,feature.feature,feature.start,feature.end,feature.strand,shapesub])
-                 if feature.feature == 'start_codon':
+                 for idx, item in shapesub:
+                     shapeout.append([txname,feature.feature,feature.start,feature.end,feature.strand,idx+1,item])
+                 if feature.feature in ['start_codon','stop_codon']:
                      shapesub=[]
                      for biggenpos in range(feature.start-25,feature.end+26):
                          #get corresponding tx pos
@@ -200,7 +201,8 @@ def shapeByRegion(shapefile,chunkStart,chunkSize):
                              #then get the shape at 1-that position in tmpshape[3:]
                              shapeval=tmpshape[3:][txpos-1]
                              shapesub.append(shapeval)
-                     shapeout.append([txname,feature.feature+'_25',feature.start+25,feature.end-25,feature.strand,shapesub])
+                     for idx, item in shapesub:
+                         shapeout.append([txname,feature.feature+'_25',feature.start+25,feature.end-25,feature.strand,idx+1,item])
     sys.stderr.write('another chunk bites the dust @ %s' % (str(datetime.now())) + '\n')
     return shapeout
 
