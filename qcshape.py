@@ -187,7 +187,7 @@ def shapeByRegion(shapefile,chunkStart,chunkSize):
                      #then get the shape at 1-that position in tmpshape[3:]
                      shapeval=tmpshape[3:][txpos-1]
                      shapesub.append(shapeval)
-                 for idx, item in shapesub:
+                 for idx, item in enumerate(shapesub):
                      shapeout.append([txname,feature.feature,feature.start,feature.end,feature.strand,idx+1,item])
                  if feature.feature in ['start_codon','stop_codon']:
                      shapesub=[]
@@ -201,7 +201,7 @@ def shapeByRegion(shapefile,chunkStart,chunkSize):
                              #then get the shape at 1-that position in tmpshape[3:]
                              shapeval=tmpshape[3:][txpos-1]
                              shapesub.append(shapeval)
-                     for idx, item in shapesub:
+                     for idx, item in enumerate(shapesub):
                          shapeout.append([txname,feature.feature+'_25',feature.start+25,feature.end-25,feature.strand,idx+1,item])
     sys.stderr.write('another chunk bites the dust @ %s' % (str(datetime.now())) + '\n')
     return shapeout
