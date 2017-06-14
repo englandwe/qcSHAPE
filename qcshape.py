@@ -116,14 +116,50 @@ def countBiotypes(sam_file,chunkStart,chunkSize):
     return btdict,mapped_ct,unmapped_ct
 
 
-def stopPositions(gtfdict,fasta_data,rtfile,min_stops):
+def stopPositions(gtfdict,fasta_data,rtfile,min_stops,min_rpkm):
     basecounts={}
+    basepercs={}
     with open(rtfile) as infile:
         for count,tx in enumerate(infile, start=0):
             #only keep even lines; those are the RT stops (odds are base density)
             if count % 2 == 0 and not tx.startswith('#'):
                 txtmp=tx.strip().split('\t')
                 txname=txtmp[0]
+                if txtmp[2] >= min_rpkm:
+                    #acquire sequence
+                    exonlist=[[x.seqname,x.start,x.end,x.strand,int(x.attdict['exon_number'])] for x in gtfdict[txname] if x.feature == 'exon']
+                    exonlist.sort(key=lambda y : y[4])
+                    fullseq=''
+                    for exon in exonlist:
+                        if exon[3] == '+':
+                            range_seq=fasta_data[exon[0]].seq[exon[1]-1:exon[2]]
+                        elif exon[3] == '-':
+                            range_seq=fasta_data[exon[0]].seq[exon[1]-1:exon[2]].reverse_complement()
+                        fullseq=fullseq + range_seq
+                    #get the base at each stop.
+                    #skipping first (because it has no base)
+                    for idx,rts in enumerate(txtmp[4:]):
+                        stopct=float(rts)
+                        if stopct >= min_stops:
+                            #icSHAPE pipeline already shifts the base 1 the left (5')
+                            rtbase=fullseq[idx].upper()
+                            try:
+                                basecounts[rtbase]+=stopct
+                            except KeyError:
+                                basecounts[rtbase]=stopct
+    for key,val in basecounts.iteritems():
+        basepercs[key]=val/float(sum(basecounts.values()))
+    return basecounts,basepercs
+
+def enrichBases(gtfdict,fasta_data,shapefile,min_score,min_rpkm):
+    basecounts={}
+    basepercs={}
+    baselist=[]
+    with open(shapefile) as infile:
+        for tx in infile:
+            txtmp=tx.strip().split('\t')
+            txname=txtmp[0]
+            if float(txtmp[2]) >= min_rpkm:
                 #acquire sequence
                 exonlist=[[x.seqname,x.start,x.end,x.strand,int(x.attdict['exon_number'])] for x in gtfdict[txname] if x.feature == 'exon']
                 exonlist.sort(key=lambda y : y[4])
@@ -134,20 +170,21 @@ def stopPositions(gtfdict,fasta_data,rtfile,min_stops):
                     elif exon[3] == '-':
                         range_seq=fasta_data[exon[0]].seq[exon[1]-1:exon[2]].reverse_complement()
                     fullseq=fullseq + range_seq
-                #get the base at each stop.
-                #the length of the RT-stop list is one longer than the actual tx
-                #there are never stops at the last position (due to 1bp shift)
-                #the first would hit the base before the tx - so we don't have the base
-                # for now, skipping first (because it has no base) and last (because it will never have any stops)
-                for idx,rts in enumerate(txtmp[4:-1]):
-                    if float(rts) >= min_stops:
-                        #icSHAPE pipeline already shifts the base 1 the left (5')
-                        rtbase=fullseq[idx].upper()
+                for idx,rts in enumerate(txtmp[4:]):
+                    if rts != 'NULL' and float(rts) >= min_score:
+                        #file format is diff from rt, shift by 1
+                        rtbase=fullseq[idx+1].upper()
+                        baselist.append([rtbase,rts])
                         try:
                             basecounts[rtbase]+=1
                         except KeyError:
                             basecounts[rtbase]=1
-    return basecounts
+    for key,val in basecounts.iteritems():
+        basepercs[key]=val/float(sum(basecounts.values()))
+    baselist.sort(key=lambda y : y[1])
+    baselist2=[[idx,x[0],x[1]] for idx,x in enumerate(baselist)]
+    return basecounts,basepercs,baselist2
+
 
 def genToTx(txname,gtfdict):
     exonlist=[[x.seqname,x.start,x.end,x.strand,int(x.attdict['exon_number'])] for x in gtfdict[txname] if x.feature == 'exon']
@@ -248,14 +285,13 @@ def corrRT(id_list,min_stops):
                 #only keep even lines; those are the RT stops (odds are base density)
                 if count % 2 == 0 and not tx.startswith('#'):
                     txtmp=tx.strip().split('\t')
-                    #currently calculating this as binary stop presence/absence
-                    #maybe later normalize to base density and compare frequency?
-                    #as with finding bases, ignoring first and last position of each transcript
-                    poi=txtmp[4:-1]
+                    #skipping first position
+                    poi=txtmp[4:]
                     bin_list=[]
                     for pos in poi:
                         if float(pos) > min_stops:
                             bin_list.append(1)
+                            #bin_list.append(float(pos))
                         else:
                             bin_list.append(0)
                     tmpdict[txtmp[0]]=bin_list
@@ -277,6 +313,31 @@ def corrRT(id_list,min_stops):
             rt_corr_out.append([rt_list[i][0],rt_list[j][0],rt_r[0],rt_r[1]])
     return rt_corr_out
 
+def focalTx(gtfdict,fasta_data,txid):
+    #get the sequence
+    exonlist=[[x.seqname,x.start,x.end,x.strand,int(x.attdict['exon_number'])] for x in gtfdict[txid] if x.feature == 'exon']
+    exonlist.sort(key=lambda y : y[4])
+    fullseq=''
+    for exon in exonlist:
+        if exon[3] == '+':
+            range_seq=fasta_data[exon[0]].seq[exon[1]-1:exon[2]]
+        elif exon[3] == '-':
+            range_seq=fasta_data[exon[0]].seq[exon[1]-1:exon[2]].reverse_complement()
+        fullseq=fullseq + range_seq
+    #get the score and position
+    with open(shapefile) as infile:
+        for line in infile:
+            txtmp=line.strip().split('\t')
+            txname=txtmp[0]
+            if txname == txid:
+                scores=[[x,y] for x,y in enumerate(txtmp[3:],start=1)]
+    #join them
+    outlist=[]
+    for i in range(0,len(scores)):
+        outlist.append([scores[i][0],fullseq[i],scores[i][1]])
+
+    return outlist
+            
 
 #####
 #main
@@ -308,14 +369,18 @@ fasta_dict=SeqIO.to_dict(SeqIO.parse(sys.argv[3], "fasta", alphabet=IUPAC.unambi
 
 cores=int(sys.argv[1])
 
-#this will be sys.argv[1]
 #sam_list=glob.glob(workdir+'/*.sam')
-id_list=['SRR1534952','SRR1534953','SRR1534954','SRR1534955']
+id_list=['DMSO1','NAI1','DMSO2','NAI2','DMSO3','NAI3']
 shapefile='icshape.out'
 prm=[]
 btcount=[]
 basestops=[]
-min_stops=1
+basepercs=[]
+stops,rpkm,score=sys.argv[4].split(',')
+min_stops=int(stops)
+min_rpkm=float(rpkm)
+min_score=float(score)
+
 for id in id_list:
     sam_file=id+'.sam'
     rt_file=id+'.rt'
@@ -336,7 +401,9 @@ for id in id_list:
     sys.stderr.write('done counting biotypes: %s @ %s' % (id,str(datetime.now())) + '\n')
     #STOPS
     sys.stderr.write('counting RT stops: %s @ %s' % (id,str(datetime.now())) + '\n')
-    basestops.append(stopPositions(gtfdict,fasta_dict,rt_file,min_stops))
+    stopct,stopperc=stopPositions(gtfdict,fasta_dict,rt_file,min_stops,min_rpkm)
+    basestops.append(stopct)
+    basepercs.append(stopperc)
     sys.stderr.write('done counting RT stops: %s @ %s' % (id,str(datetime.now())) + '\n')
 
 #Output reads mapped, biotypes, base stops
@@ -353,10 +420,14 @@ for i in range(0,len(id_list)):
 btout.close()
 
 rtout=open('stopbases.txt','w')
+rtout2=open('stopbases_perc.txt','w')
 rtout.write("Sample\tBase\tCount\n")
+rtout2.write("Sample\tBase\tPerc\n")
 for i in range(0,len(id_list)):
     rtout.write(flattenDictAddCol(basestops[i],id_list[i])+'\n')
+    rtout2.write(flattenDictAddCol(basepercs[i],id_list[i])+'\n')
 rtout.close()
+rtout2.close()
 
 
 #now for the non-file-specific stuff
@@ -378,20 +449,64 @@ regout.close()
 sys.stderr.write('Done with shape by region @ %s' % (str(datetime.now())) + '\n')
 
 #3.5. Correlation of expression level b/w replicates
+
 #4. Correlation b/w stops in replicates (sample should have more in common than control)
 
 #first, expression (RPKM files)
 sys.stderr.write('RPKM corr @ %s' % (str(datetime.now())) + '\n')
 rpkm_corr=corrRPKM(id_list)
-rpkmout=open('rpkmcorrtest','w')
+rpkmout=open('rpkmcorr.txt','w')
 rpkmout.write(flattenList(rpkm_corr))
 rpkmout.close()
 
 #now RT
 sys.stderr.write('RT corr @ %s' % (str(datetime.now())) + '\n')
 rt_corr=corrRT(id_list,min_stops)
-rtcorrout=open('rtcorrtest','w')
+rtcorrout=open('rtcorr.txt','w')
 rtcorrout.write(flattenList(rt_corr))
 rtcorrout.close()
+
+#shape scores by base
+#make a dict (just like raw counts) and also make a list of base, score
+sys.stderr.write('Enrich bases @ %s' % (str(datetime.now())) + '\n')
+enrichcounts,enrichperc,enrichlist=enrichBases(gtfdict,fasta_dict,shapefile,min_score,min_rpkm)
+enout=open('enrichbases.txt','w')
+enout.write("Base\tCount\n")
+enout.write(flattenDict(enrichcounts))
+enout.close()
+
+enout2=open('enrichbases_perc.txt','w')
+enout2.write("Base\tPerc\n")
+enout2.write(flattenDict(enrichperc))
+enout2.close()
+
+enout3=open('enrichbases_list.txt','w')
+enout3.write("Base\tScore\n")
+enout3.write(flattenList(enrichlist))
+enout3.close()
+sys.stderr.write('Enrich bases done @ %s' % (str(datetime.now())) + '\n')
+
+# let's yoink 18S
+sys.stderr.write('Getting 18S @ %s' % (str(datetime.now())) + '\n')
+out18s=focalTx(gtfdict,fasta_dict,'18S')
+focout=open('18S_scores.txt','w')
+focout.write("Position\tBase\tScore\n")
+focout.write(flattenList(out18s))
+focout.close()
+sys.stderr.write('18S done @ %s' % (str(datetime.now())) + '\n')
+
+sys.stderr.write('Getting 28S @ %s' % (str(datetime.now())) + '\n')
+out28s=focalTx(gtfdict,fasta_dict,'28S')
+focout2=open('28S_scores.txt','w')
+focout2.write("Position\tBase\tScore\n")
+focout2.write(flattenList(out28s))
+focout2.close()
+sys.stderr.write('28S done @ %s' % (str(datetime.now())) + '\n')
+
+
+
 sys.stderr.write('Done @ %s' % (str(datetime.now())) + '\n')
+
+
+
 
