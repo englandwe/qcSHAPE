@@ -63,10 +63,10 @@ def flattenList(listin):
     final='\n'.join(list2)
     return final
 
-def flattenListAddCol(listin,col1):
+def flattenListAddCols(listin,col_list):
     list2=[]
     for item in listin:
-        list2.append(str(col1) + '\t' + '\t'.join([str(x) for x in item]))
+        list2.append('\t'.join([str(x) for x in col_list]) + '\t' + '\t'.join([str(x) for x in item]))
     final='\n'.join(list2)
     return final
 
@@ -75,9 +75,9 @@ def flattenDict(dictin):
     final=flattenList(listin)
     return final
 
-def flattenDictAddCol(dictin,col1):
+def flattenDictAddCols(dictin,col_list):
     listin=[[key,val] for key,val in dictin.iteritems()]
-    final=flattenListAddCol(listin,col1)
+    final=flattenListAddCols(listin,col_list)
     return final
 
 #Science goes here
@@ -182,7 +182,8 @@ def enrichBases(gtfdict,fasta_data,shapefile,min_score,min_rpkm):
     for key,val in basecounts.iteritems():
         basepercs[key]=val/float(sum(basecounts.values()))
     baselist.sort(key=lambda y : y[1])
-    baselist2=[[idx,x[0],x[1]] for idx,x in enumerate(baselist)]
+#    baselist2=[[idx,x[0],x[1]] for x in enumerate(baselist)]
+    baselist2=[[x[0],x[1]] for x in baselist]
     return basecounts,basepercs,baselist2
 
 
@@ -337,14 +338,24 @@ def focalTx(gtfdict,fasta_data,txid):
         outlist.append([scores[i][0],fullseq[i],scores[i][1]])
 
     return outlist
-            
 
 #####
 #main
+cores=int(sys.argv[1])
+idfile=sys.argv[2]
+gtffile=sys.argv[3]
+fastafile=sys.argv[4]
+stops,rpkm,score=sys.argv[5].split(',')
+min_stops=int(stops)
+min_rpkm=float(rpkm)
+min_score=float(score)
+
+
+
 sys.stderr.write('importing gtf @ %s' % (str(datetime.now())) + '\n')
 
 gtfdict={}
-with open(sys.argv[2]) as infile:
+with open(gtffile) as infile:
 #with open('../../mouse_txome/Mus_musculus.GRCm38.87.gtf') as infile:
 #with open('../Mus_musculus.GRCm38.87.gtf') as infile:
     for line in infile:
@@ -365,21 +376,21 @@ sys.stderr.write('importing fasta @ %s' % (str(datetime.now())) + '\n')
 #fasta_dict=SeqIO.index('../Mus_musculus.GRCm38.dna_sm.primary_assembly.fa', "fasta", alphabet=IUPAC.unambiguous_dna)
 
 #higher memory, hopefully faster
-fasta_dict=SeqIO.to_dict(SeqIO.parse(sys.argv[3], "fasta", alphabet=IUPAC.unambiguous_dna))
+fasta_dict=SeqIO.to_dict(SeqIO.parse(fastafile, "fasta", alphabet=IUPAC.unambiguous_dna))
 
-cores=int(sys.argv[1])
+id_dict={}
+with open(idfile) as infile:
+    for line in infile:
+        tmpline=line.strip().split('\t')
+        id_dict[tmpline[0]] = tmpline[1]
 
-#sam_list=glob.glob(workdir+'/*.sam')
-id_list=['DMSO1','NAI1','DMSO2','NAI2','DMSO3','NAI3']
 shapefile='icshape.out'
 prm=[]
 btcount=[]
 basestops=[]
 basepercs=[]
-stops,rpkm,score=sys.argv[4].split(',')
-min_stops=int(stops)
-min_rpkm=float(rpkm)
-min_score=float(score)
+
+id_list=sorted(id_dict.keys())
 
 for id in id_list:
     sam_file=id+'.sam'
@@ -408,27 +419,26 @@ for id in id_list:
 
 #Output reads mapped, biotypes, base stops
 mapout=open('reads_mapped.txt','w')
-mapout.write("Sample\tMapped\tUnmapped\tPercmapped\n")
+mapout.write("Sample\tGroup\tMapped\tUnmapped\tPercmapped\n")
 for i in range(0,len(id_list)):
-    mapout.write("%s\t%s\t%s\t%s\n" % (id_list[i],prm[i][0],prm[i][1],prm[i][2]))
+    mapout.write("%s\t%s\t%s\t%s\t%s\n" % (id_list[i],id_dict[id_list[i]],prm[i][0],prm[i][1],prm[i][2]))
 mapout.close()
 
 btout=open('biotypes.txt','w')
-btout.write("Sample\tBiotype\tReadsMapped\n")
+btout.write("Sample\tGroup\tBiotype\tReadsMapped\n")
 for i in range(0,len(id_list)):
-    btout.write(flattenDictAddCol(btcount[i],id_list[i])+'\n')
+    btout.write(flattenDictAddCols(btcount[i],[id_list[i],id_dict[id_list[i]]])+'\n')
 btout.close()
 
 rtout=open('stopbases.txt','w')
 rtout2=open('stopbases_perc.txt','w')
-rtout.write("Sample\tBase\tCount\n")
-rtout2.write("Sample\tBase\tPerc\n")
+rtout.write("Sample\tGroup\tBase\tCount\n")
+rtout2.write("Sample\tGroup\tBase\tPerc\n")
 for i in range(0,len(id_list)):
-    rtout.write(flattenDictAddCol(basestops[i],id_list[i])+'\n')
-    rtout2.write(flattenDictAddCol(basepercs[i],id_list[i])+'\n')
+    rtout.write(flattenDictAddCols(basestops[i],[id_list[i],id_dict[id_list[i]]])+'\n')
+    rtout2.write(flattenDictAddCols(basepercs[i],[id_list[i],id_dict[id_list[i]]])+'\n')
 rtout.close()
 rtout2.close()
-
 
 #now for the non-file-specific stuff
 #06 & 07 shape across RNA regions (5'UTR,3'UTR, orf, start & stop codons), plus a range around start codons
@@ -486,7 +496,7 @@ enout3.write(flattenList(enrichlist))
 enout3.close()
 sys.stderr.write('Enrich bases done @ %s' % (str(datetime.now())) + '\n')
 
-# let's yoink 18S
+# let's yoink 18S/28S
 sys.stderr.write('Getting 18S @ %s' % (str(datetime.now())) + '\n')
 out18s=focalTx(gtfdict,fasta_dict,'18S')
 focout=open('18S_scores.txt','w')
@@ -502,8 +512,6 @@ focout2.write("Position\tBase\tScore\n")
 focout2.write(flattenList(out28s))
 focout2.close()
 sys.stderr.write('28S done @ %s' % (str(datetime.now())) + '\n')
-
-
 
 sys.stderr.write('Done @ %s' % (str(datetime.now())) + '\n')
 
