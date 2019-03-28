@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-#Input: a directory with the output of the icSHAPE pipeline
-
 import sys
 import os
 import re
